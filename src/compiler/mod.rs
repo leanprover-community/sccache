@@ -21,5 +21,6 @@ mod compiler;
 mod gcc;
 mod msvc;
 mod rust;
+mod lean;
 
 pub use compiler::compiler::*;

@@ -23,6 +23,7 @@ use compiler::clang::Clang;
 use compiler::gcc::GCC;
 use compiler::msvc::MSVC;
 use compiler::rust::Rust;
+use compiler::lean::Lean;
 use dist;
 #[cfg(feature = "dist-client")]
 use dist::pkg;
@@ -85,6 +86,7 @@ pub enum CompilerKind {
     C(CCompilerKind),
     /// A Rust compiler.
     Rust,
+    Lean,
 }
 
 /// An interface to a compiler for argument parsing.
@@ -715,6 +717,19 @@ fn detect_compiler<T>(creator: &T,
     }))
 }
 
+fn detect_other_compiler<T>(creator: T,
+                        executable: PathBuf,
+                        env: Vec<(OsString, OsString)>,
+                        pool: CpuPool)
+                        -> SFuture<Option<Box<Compiler<T>>>>
+    where T: CommandCreatorSync
+{
+    trace!("other compiler");
+    if executable.as_path() == Path::new("lean") {
+        f_ok(Some (Lean::new(executable))) }
+    else { f_ok(None) }
+}
+
 fn detect_c_compiler<T>(creator: T,
                         executable: PathBuf,
                         env: Vec<(OsString, OsString)>,
@@ -787,7 +802,8 @@ gcc
         debug!("nothing useful in detection output {:?}", stdout);
         debug!("compiler status: {}", output.status);
         debug!("compiler stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-        f_ok(None)
+        detect_other_compiler(creator, executable, env, pool)
+        // f_ok(None)
     }))
 }
 
@@ -892,6 +908,16 @@ LLVM version: 6.0", "")));
         next_command(&creator, Ok(MockChild::new(exit_status(0), &sysroot, "")));
         let c = detect_compiler(&creator, &rustc, &[], &pool).wait().unwrap().unwrap();
         assert_eq!(CompilerKind::Rust, c.kind());
+    }
+
+    #[test]
+    fn test_detect_compiler_kind_lean() {
+        let f = TestFixture::new();
+        let creator = new_creator();
+        let pool = CpuPool::new(1);
+        next_command(&creator, Ok(MockChild::new(exit_status(0), "lean", "")));
+        let c = detect_compiler(&creator, &f.bins[0], &[], &pool).wait().unwrap().unwrap();
+        assert_eq!(CompilerKind::Lean, c.kind());
     }
 
     #[test]
