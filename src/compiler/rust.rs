@@ -193,12 +193,12 @@ const CACHE_VERSION: &[u8] = b"2";
 /// in `pool`.
 fn hash_all(files: &[PathBuf], pool: &CpuPool) -> SFuture<Vec<String>>
 {
-    let start = time::Instant::now();
+    // let start = time::Instant::now();
     let count = files.len();
     let pool = pool.clone();
     Box::new(future::join_all(files.into_iter().map(move |f| Digest::file(f, &pool)).collect::<Vec<_>>())
              .map(move |hashes| {
-                 trace!("Hashed {} files in {}", count, fmt_duration_as_secs(&start.elapsed()));
+                 // trace!("Hashed {} files in {}", count, fmt_duration_as_secs(&start.elapsed()));
                  hashes
              }))
 }

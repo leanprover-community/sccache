@@ -20,10 +20,12 @@ use cache::{
 use compiler::msvc;
 use compiler::c::{CCompiler, CCompilerKind};
 use compiler::clang::Clang;
+use jobserver::Client;
+use tokio_core::reactor::Core;
 use compiler::gcc::GCC;
 use compiler::msvc::MSVC;
 use compiler::rust::Rust;
-use compiler::lean::Lean;
+use compiler::lean::{Lean,ParsedArguments};
 use dist;
 #[cfg(feature = "dist-client")]
 use dist::pkg;
@@ -103,6 +105,12 @@ pub trait Compiler<T>: Send + 'static
                        arguments: &[OsString],
                        cwd: &Path) -> CompilerArguments<Box<CompilerHasher<T> + 'static>>;
     fn box_clone(&self) -> Box<Compiler<T>>;
+    fn parse_arguments2(
+        &self, creator: &T,
+        arguments: &[OsString],
+        cwd: &Path) -> CompilerArguments<Box<CompilerHasher<T> + 'static>>
+    where T: CommandCreatorSync
+    { Compiler::parse_arguments(self, arguments, cwd) }
 }
 
 impl<T: CommandCreatorSync> Clone for Box<Compiler<T>> {
@@ -717,18 +725,21 @@ fn detect_compiler<T>(creator: &T,
     }))
 }
 
-fn detect_other_compiler<T>(creator: T,
-                        executable: PathBuf,
-                        env: Vec<(OsString, OsString)>,
-                        pool: CpuPool)
-                        -> SFuture<Option<Box<Compiler<T>>>>
-    where T: CommandCreatorSync
-{
-    trace!("other compiler");
-    if executable.as_path() == Path::new("lean") {
-        f_ok(Some (Lean::new(executable))) }
-    else { f_ok(None) }
-}
+// fn detect_other_compiler<T>(creator: T,
+//                         executable: PathBuf,
+//                         env: Vec<(OsString, OsString)>,
+//                         pool: CpuPool)
+//                         -> SFuture<Option<Box<Compiler<T>>>>
+//     where T: CommandCreatorSync
+// {
+//     trace!("other compiler");
+//     f_ok (Some(Lean::new(executable)))
+// /*
+//     if executable.as_path() == Path::new("lean") {
+//         f_ok (Some(Lean::new(executable))) }
+//     else { f_ok(None) }
+// */
+// }
 
 fn detect_c_compiler<T>(creator: T,
                         executable: PathBuf,
@@ -802,8 +813,8 @@ gcc
         debug!("nothing useful in detection output {:?}", stdout);
         debug!("compiler status: {}", output.status);
         debug!("compiler stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-        detect_other_compiler(creator, executable, env, pool)
-        // f_ok(None)
+        // detect_other_compiler(creator, executable, env, pool)
+        f_ok(None)
     }))
 }
 
@@ -918,6 +929,26 @@ LLVM version: 6.0", "")));
         next_command(&creator, Ok(MockChild::new(exit_status(0), "lean", "")));
         let c = detect_compiler(&creator, &f.bins[0], &[], &pool).wait().unwrap().unwrap();
         assert_eq!(CompilerKind::Lean, c.kind());
+    }
+
+    #[test]
+    fn test_lean_scratch() {
+        let f = TestFixture::new();
+        // let mut reactor = Core::new().unwrap();
+        // let creator = new_creator();
+        let mut core = Core::new().unwrap();
+        let jobserver = unsafe { Client::new() };
+        let creator = <ProcessCommandCreator as CommandCreatorSync>::new(&core.handle(), &jobserver);
+        // let creator = <ProcessCommandCreator as CommandCreator>::new(core.handle(), jobserver);
+        let pool = CpuPool::new(1);
+        // next_command(&creator, Ok(MockChild::new(exit_status(0), "lean", "")));
+        let args  = [OsString::from("--make"), OsString::from("data/list/basic.lean")];
+        let cwd = PathBuf::from("~/lean/dorhinj-mathlib/");
+        let ln = core.run(Lean::new(&creator,&args,&cwd)).unwrap();
+        let args = ln.parse_arguments2(&creator,&args,&cwd);
+        println!("Lean:\n {:?}\n", ln);
+        println!("Args:\n {:?}\n", args);
+        assert_eq!(CompilerKind::Lean, CompilerKind::Rust);
     }
 
     #[test]
