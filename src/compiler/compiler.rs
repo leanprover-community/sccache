@@ -23,6 +23,7 @@ use compiler::clang::Clang;
 use compiler::gcc::GCC;
 use compiler::msvc::MSVC;
 use compiler::rust::Rust;
+use compiler::lean::Lean;
 use dist;
 #[cfg(feature = "dist-client")]
 use dist::pkg;
@@ -85,6 +86,7 @@ pub enum CompilerKind {
     C(CCompilerKind),
     /// A Rust compiler.
     Rust,
+    Lean
 }
 
 /// An interface to a compiler for argument parsing.
@@ -672,47 +674,51 @@ fn detect_compiler<T>(creator: &T,
         None => return f_err("could not determine compiler kind"),
         Some(f) => f,
     };
-    let rustc_vv = if filename.to_string_lossy().to_lowercase() == "rustc" {
-        // Sanity check that it's really rustc.
-        let executable = executable.to_path_buf();
-        let child = creator.clone().new_command_sync(&executable)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .env_clear()
-            .envs(ref_env(env))
-            .args(&["-vV"])
-            .spawn();
-        let output = child.and_then(move |child| {
-            child.wait_with_output()
-                .chain_err(|| "failed to read child output")
-        });
-        Box::new(output.map(|output| {
-            if output.status.success() {
-                if let Ok(stdout) = String::from_utf8(output.stdout) {
-                    if stdout.starts_with("rustc ") {
-                        return Some(stdout)
+
+    if filename.to_string_lossy() == "lean" {
+        debug!("Found Lean");
+        f_ok (Some(Box::new(Lean::new(executable.to_path_buf()))))
+    } else {
+        let creator = creator.clone();
+        let exe = executable.to_owned();
+        let pool = pool.clone();
+        let rustc_vv = if filename.to_string_lossy().to_lowercase() == "rustc" {
+            // Sanity check that it's really rustc.
+            let executable = executable.to_path_buf();
+            let child = creator.clone().new_command_sync(&executable)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .env_clear()
+                .envs(ref_env(env))
+                .args(&["-vV"])
+                .spawn();
+            let output = child.and_then(move |child| {
+                child.wait_with_output()
+                    .chain_err(|| "failed to read child output")
+            });
+            Box::new(output.map(|output| {
+                if output.status.success() {
+                    if let Ok(stdout) = String::from_utf8(output.stdout) {
+                        if stdout.starts_with("rustc ") {
+                            return Some(stdout)
+                        }
                     }
                 }
-            }
-            None
-        }))
-    } else {
-        f_ok(None)
-    };
-
-    let creator = creator.clone();
-    let executable = executable.to_owned();
-    let env = env.to_owned();
-    let pool = pool.clone();
-    Box::new(rustc_vv.and_then(move |rustc_vv| {
-        if let Some(rustc_verbose_version) = rustc_vv {
-            debug!("Found rustc");
-            Box::new(Rust::new(creator, executable, &env, &rustc_verbose_version, pool)
-                .map(|c| Some(Box::new(c) as Box<Compiler<T>>)))
+                None
+            }))
         } else {
-            detect_c_compiler(creator, executable, env, pool)
-        }
-    }))
+            f_ok(None)
+        };
+        let env = env.to_owned();
+        Box::new(rustc_vv.and_then(move |rustc_vv| {
+            if let Some(rustc_verbose_version) = rustc_vv {
+                debug!("Found rustc");
+                Box::new(Rust::new(creator, exe, &env, &rustc_verbose_version, pool)
+                         .map(|c| Some(Box::new(c) as Box<Compiler<T>>)))
+            } else {
+                detect_c_compiler(creator, PathBuf::from(&exe), env, pool)
+            }
+        })) }
 }
 
 fn detect_c_compiler<T>(creator: T,
@@ -892,6 +898,22 @@ LLVM version: 6.0", "")));
         next_command(&creator, Ok(MockChild::new(exit_status(0), &sysroot, "")));
         let c = detect_compiler(&creator, &rustc, &[], &pool).wait().unwrap().unwrap();
         assert_eq!(CompilerKind::Rust, c.kind());
+    }
+
+    #[test]
+    fn test_detect_compiler_kind_lean() {
+        let f = TestFixture::new();
+        let lean = f.mk_bin("lean").unwrap();
+        let creator = new_creator();
+        let pool = CpuPool::new(1);
+        let output = [
+            "interactive.olean",
+            "mk_iff_of_inductive_prop.olean",
+            "split_ifs.olean",
+            "basic.olean" ].join ("\n");
+        next_command(&creator, Ok(MockChild::new(exit_status(0), output, "")));
+        let c = detect_compiler(&creator, &lean, &[], &pool).wait().unwrap().unwrap();
+        assert_eq!(CompilerKind::Lean, c.kind());
     }
 
     #[test]

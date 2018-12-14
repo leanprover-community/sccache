@@ -52,15 +52,20 @@ struct Compiler {
     pub name: &'static str,
     pub exe: OsString,
     pub env_vars: Vec<(OsString, OsString)>,
+    pub in_ext: &'static str,
+    pub out_ext: &'static str,
 }
+
+enum CompilerKind {
+    Lean, C(&'static str) }
 
 // Test GCC + clang on non-OS X platforms.
 #[cfg(all(unix, not(target_os="macos")))]
-const COMPILERS: &'static [&'static str] = &["gcc", "clang"];
+const COMPILERS: &'static [CompilerKind] = &[CompilerKind::C("gcc"),CompilerKind::C("clang"),CompilerKind::Lean];
 
 // OS X ships a `gcc` that's just a clang wrapper, so only test clang there.
 #[cfg(target_os="macos")]
-const COMPILERS: &'static [&'static str] = &["clang"];
+const COMPILERS: &'static [CompilerKind] = &[CompilerKind::C("clang"),CompilerKind::Lean];
 
 //TODO: could test gcc when targeting mingw.
 
@@ -88,10 +93,11 @@ macro_rules! vec_from {
     };
 }
 
-fn compile_cmdline<T: AsRef<OsStr>>(compiler: &str, exe: T, input: &str, output: &str) -> Vec<OsString> {
+fn compile_cmdline<T: AsRef<OsStr>>(compiler: &str, exe: T, input: &PathBuf, output: &PathBuf) -> Vec<OsString> {
     match compiler {
         "gcc" | "clang" => vec_from!(OsString, exe.as_ref(), "-c", input, "-o", output),
-        "cl.exe" => vec_from!(OsString, exe, "-c", input, format!("-Fo{}", output)),
+        "cl.exe" => vec_from!(OsString, exe, "-c", input, format!("-Fo{}", output.clone().into_os_string().to_str().unwrap())),
+        "lean" => vec_from!(OsString, exe, "--make", input),
         _ => panic!("Unsupported compiler: {}", compiler),
     }
 }
@@ -119,21 +125,24 @@ const INPUT_ERR: &'static str = "test_err.c";
 const OUTPUT: &'static str = "test.o";
 
 fn test_basic_compile(compiler: Compiler, tempdir: &Path) {
-    let Compiler { name, exe, env_vars } = compiler;
-    trace!("run_sccache_command_test: {}", name);
+    let Compiler { name, exe, env_vars, in_ext, out_ext } = compiler;
+    println!("run_sccache_command_test: {}", name);
     // Compile a source file.
     // Copy the source files into the tempdir so we can compile with relative paths, since the commandline winds up in the hash key.
-    for f in &[INPUT, INPUT_ERR] {
+    let input = PathBuf::from(INPUT).with_extension(in_ext.clone());
+    let input_err = PathBuf::from(INPUT_ERR).with_extension(in_ext);
+    let output = PathBuf::from(OUTPUT).with_extension(out_ext);
+    for f in &[&input, &input_err] {
         let original_source_file = Path::new(file!()).parent().unwrap().join(f);
         let source_file = tempdir.join(f);
         trace!("fs::copy({:?}, {:?})", original_source_file, source_file);
         fs::copy(&original_source_file, &source_file).unwrap();
     }
 
-    let out_file = tempdir.join("test.o");
+    let out_file = tempdir.join(&output);
     trace!("compile");
     Command::main_binary().unwrap()
-        .args(&compile_cmdline(name, &exe, INPUT, OUTPUT))
+        .args(&compile_cmdline(name, &exe, &input, &output))
         .current_dir(tempdir)
         .envs(env_vars.clone())
         .assert()
@@ -149,9 +158,9 @@ fn test_basic_compile(compiler: Compiler, tempdir: &Path) {
     trace!("compile");
     fs::remove_file(&out_file).unwrap();
     Command::main_binary().unwrap()
-        .args(&compile_cmdline(name, &exe, INPUT, OUTPUT))
+        .args(&compile_cmdline(name, &exe, &input, &output))
         .current_dir(tempdir)
-.envs(env_vars.clone())
+        .envs(env_vars.clone())
         .assert()
         .success();
     assert_eq!(true, fs::metadata(&out_file).and_then(|m| Ok(m.len() > 0)).unwrap());
@@ -165,10 +174,10 @@ fn test_basic_compile(compiler: Compiler, tempdir: &Path) {
 }
 
 fn test_msvc_deps(compiler: Compiler, tempdir: &Path) {
-    let Compiler { name, exe, env_vars } = compiler;
+    let Compiler { name, exe, env_vars, in_ext: _, out_ext: _ } = compiler;
     // Check that -deps works.
     trace!("compile with -deps");
-    let mut args = compile_cmdline(name, &exe, INPUT, OUTPUT);
+    let mut args = compile_cmdline(name, &exe, &INPUT.into(), &OUTPUT.into());
     args.push("-depstest.d".into());
     Command::main_binary().unwrap()
         .args(&args)
@@ -189,9 +198,9 @@ fn test_msvc_deps(compiler: Compiler, tempdir: &Path) {
 }
 
 fn test_gcc_mp_werror(compiler: Compiler, tempdir: &Path) {
-    let Compiler { name, exe, env_vars } = compiler;
+    let Compiler { name, exe, env_vars, in_ext: _, out_ext: _ } = compiler;
     trace!("test -MP with -Werror");
-    let mut args = compile_cmdline(name, &exe, INPUT_ERR, OUTPUT);
+    let mut args = compile_cmdline(name, &exe, &INPUT_ERR.into(), &OUTPUT.into());
     args.extend(vec_from!(OsString, "-MD", "-MP", "-MF", "foo.pp", "-Werror"));
     // This should fail, but the error should be from the #error!
     Command::main_binary().unwrap()
@@ -205,7 +214,7 @@ fn test_gcc_mp_werror(compiler: Compiler, tempdir: &Path) {
 }
 
 fn test_gcc_fprofile_generate_source_changes(compiler: Compiler, tempdir: &Path) {
-    let Compiler { name, exe, env_vars } = compiler;
+    let Compiler { name, exe, env_vars, in_ext: _, out_ext: _ } = compiler;
     trace!("test -fprofile-generate with different source inputs");
     zero_stats();
     const SRC: &str = "source.c";
@@ -218,7 +227,7 @@ int main(int argc, char** argv) {
   return 0;
 }
 ");
-    let mut args = compile_cmdline(name, &exe, SRC, OUTPUT);
+    let mut args = compile_cmdline(name, &exe, &SRC.into(), &OUTPUT.into());
     args.extend(vec_from!(OsString, "-fprofile-generate"));
     trace!("compile source.c (1)");
     Command::main_binary().unwrap()
@@ -280,18 +289,35 @@ fn run_sccache_command_tests(compiler: Compiler, tempdir: &Path) {
     }
 }
 
+fn input_extension(c: &CompilerKind) -> &'static str
+{ match c {
+    CompilerKind::Lean => "lean",
+    CompilerKind::C(_) => "c" } }
+
+fn output_extension(c: &CompilerKind) -> &'static str
+{ match c {
+    CompilerKind::Lean => "olean",
+    CompilerKind::C(_) => "o" } }
+
+fn compiler_name(c: &CompilerKind) -> &'static str
+{ match c {
+    CompilerKind::Lean => "lean",
+    CompilerKind::C(name) => name } }
+
 #[cfg(unix)]
 fn find_compilers() -> Vec<Compiler> {
     let cwd = env::current_dir().unwrap();
     COMPILERS.iter()
         .filter_map(|c| {
-            match which_in(c, env::var_os("PATH"), &cwd) {
+            match which_in(compiler_name(c), env::var_os("PATH"), &cwd) {
                 Ok(full_path) => match full_path.canonicalize() {
                     Ok(full_path_canon) => Some(Compiler {
-                        name: *c,
+                        name: compiler_name(c),
                         exe: full_path_canon.into_os_string(),
                         env_vars: vec![],
-                    }),
+                        in_ext: input_extension(c),
+                        out_ext: output_extension(c),
+                    } ),
                     Err(_) => None,
                 },
                 Err(_) => None,

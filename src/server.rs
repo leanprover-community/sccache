@@ -549,10 +549,10 @@ impl<C> SccacheService<C>
                       cwd: PathBuf,
                       env_vars: Vec<(OsString, OsString)>) -> SccacheResponse
     {
-        let mut stats = self.stats.borrow_mut();
         match compiler {
             None => {
                 debug!("check_compiler: Unsupported compiler");
+                let mut stats = self.stats.borrow_mut();
                 stats.requests_unsupported_compiler += 1;
                 return Message::WithoutBody(
                     Response::Compile(CompileResponse::UnsupportedCompiler)
@@ -565,7 +565,8 @@ impl<C> SccacheService<C>
                 match c.parse_arguments(&cmd, &cwd) {
                     CompilerArguments::Ok(hasher) => {
                         debug!("parse_arguments: Ok: {:?}", cmd);
-                        stats.requests_executed += 1;
+                        { let mut stats = self.stats.borrow_mut();
+                          stats.requests_executed += 1; }
                         let (tx, rx) = Body::pair();
                         self.start_compile_task(hasher, cmd, cwd, env_vars, tx);
                         let res = CompileResponse::CompileStarted;
@@ -578,10 +579,12 @@ impl<C> SccacheService<C>
                         } else {
                             debug!("parse_arguments: CannotCache({}): {:?}", why, cmd)
                         }
+                        let mut stats = self.stats.borrow_mut();
                         stats.requests_not_cacheable += 1;
                     }
                     CompilerArguments::NotCompilation => {
                         debug!("parse_arguments: NotCompilation: {:?}", cmd);
+                        let mut stats = self.stats.borrow_mut();
                         stats.requests_not_compile += 1;
                     }
                 }
