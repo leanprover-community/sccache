@@ -1,7 +1,10 @@
 
 use compiler::{ColorMode, Compiler, CompilerArguments, CompilerHasher, CompilerKind, Compilation, HashResult, CompileCommand, Cacheable};
-use std::path::{PathBuf,Path};
+use std::collections::{HashMap,BTreeSet,BTreeMap};
 use std::ffi::{OsString};
+use std::fs::File;
+use std::path::{PathBuf,Path};
+use std::sync::{Mutex};
 use dist;
 #[cfg(feature = "dist-client")]
 use dist::pkg;
@@ -11,10 +14,6 @@ use std::os::unix::ffi::OsStringExt;
 use std::borrow::Cow;
 use mock_command::{CommandCreatorSync, RunCommand};
 use util::*;
-// use compiler::{NoopOutputsRewriter, OutputsRewriter};
-
-use std::sync::{Mutex};
-use std::collections::{HashMap,BTreeSet,BTreeMap};
 
 use errors::*;
 
@@ -35,7 +34,7 @@ pub struct ParsedArguments
 impl ParsedArguments {
     pub fn new(args : &[OsString], cwd: &PathBuf) -> ParsedArguments {
         assert!(args.len() == 2);
-        assert!(args[0] == "--make");
+        assert!(args[0] == OsString::from("--make"));
         ParsedArguments {
             input: PathBuf::from(&args[1]),
             executable: PathBuf::from(env!("HOME").to_owned() + "/lean/lean-master/bin/lean"),
@@ -256,5 +255,5 @@ where T: CommandCreatorSync,
 #[cfg(feature = "dist-client")]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl pkg::ToolchainPackager for Lean {
-    fn write_pkg(self: Box<Self>, f: fs::File) -> Result<()> {
+    fn write_pkg(self: Box<Self>, f: File) -> Result<()> {
         Ok(()) } }
